@@ -82,6 +82,7 @@ final class VideoProject: NSDocument {
         if let thumb = snapshotThumbnail { replaceChild(Project.thumbnailFilename, with: thumb) }
         replaceChild(ChatSessionStore.dirName, with: chatDirWrapper())
         if let mediaDir = mediaDirWrapper() { replaceChild(Project.mediaDirectoryName, with: mediaDir) }
+        if let analysisDir = analysisDirWrapper() { replaceChild(Project.analysisDirectoryName, with: analysisDir) }
 
         return packageWrapper
     }
@@ -91,6 +92,15 @@ final class VideoProject: NSDocument {
         let mediaDir = projectURL.appendingPathComponent(Project.mediaDirectoryName, isDirectory: true)
         guard FileManager.default.fileExists(atPath: mediaDir.path) else { return nil }
         return try? FileWrapper(url: mediaDir, options: .immediate)
+    }
+
+    /// Search indexes + transcript caches are written straight to disk by the
+    /// indexer; re-wrap them at save so document writes don't drop the directory.
+    private func analysisDirWrapper() -> FileWrapper? {
+        guard let projectURL = fileURL else { return nil }
+        let analysisDir = projectURL.appendingPathComponent(Project.analysisDirectoryName, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: analysisDir.path) else { return nil }
+        return try? FileWrapper(url: analysisDir, options: .immediate)
     }
 
     private nonisolated func chatDirWrapper() -> FileWrapper {
@@ -218,6 +228,7 @@ final class VideoProject: NSDocument {
         } else {
             editorViewModel.seedGenerationLogFromAssets()
         }
+        editorViewModel.mediaIndexer.projectOpened()
     }
 
     // MARK: - Thumbnail

@@ -110,6 +110,7 @@ enum Project {
     static let generationLogFilename = "generation-log.json"
     static let thumbnailFilename = "thumbnail.jpg"
     static let mediaDirectoryName = "media"
+    static let analysisDirectoryName = "analysis"
 
     static let storageDirectory: URL = {
         let url = FileManager.default.homeDirectoryForCurrentUser

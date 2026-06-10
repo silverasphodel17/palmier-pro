@@ -124,6 +124,74 @@ extension MediaTab {
     }
 }
 
+// MARK: - Embedded grids (inside unified search scroll)
+
+extension MediaTab {
+    @ViewBuilder
+    func embeddedFolderGrid(width: CGFloat, dims: GridDimensions) -> some View {
+        let layout = computeLayout(width: width)
+        let columns = Array(repeating: GridItem(.fixed(dims.tileWidth), spacing: dims.spacing), count: max(dims.cols, 1))
+        LazyVGrid(columns: columns, alignment: .leading, spacing: dims.spacing) {
+            ForEach(layout.cells) { cell in
+                cellView(for: cell)
+                    .frame(width: dims.tileWidth)
+                    .id(cell.id)
+                    .background(assetFrameReader(for: cell.id))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    func embeddedFlatGrid(dims: GridDimensions) -> some View {
+        let assets = sortAndFilter(editor.mediaAssets)
+        let columns = Array(repeating: GridItem(.fixed(dims.tileWidth), spacing: dims.spacing), count: max(dims.cols, 1))
+        LazyVGrid(columns: columns, alignment: .leading, spacing: dims.spacing) {
+            ForEach(assets) { asset in
+                assetCellView(for: asset)
+                    .frame(width: dims.tileWidth)
+                    .id(asset.id)
+                    .background(assetFrameReader(for: asset.id))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    func embeddedGroupedGrid(dims: GridDimensions) -> some View {
+        let bucketed = editor.mediaAssets.reduce(into: [String?: [MediaAsset]]()) { dict, asset in
+            dict[asset.folderId, default: []].append(asset)
+        }
+        let rootAssets = sortAndFilter(bucketed[nil] ?? [])
+        let allFolders = editor.folders
+            .map { ($0, editor.folderPath(for: $0.id).map(\.name).joined(separator: " / ")) }
+            .sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
+
+        LazyVStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            if !rootAssets.isEmpty {
+                groupedSection(
+                    title: "Library",
+                    folderId: nil,
+                    assets: rootAssets,
+                    tileWidth: dims.tileWidth,
+                    spacing: dims.spacing
+                )
+            }
+            ForEach(allFolders, id: \.0.id) { folder, path in
+                let assets = sortAndFilter(bucketed[folder.id] ?? [])
+                groupedSection(
+                    title: path,
+                    folderId: folder.id,
+                    assets: assets,
+                    tileWidth: dims.tileWidth,
+                    spacing: dims.spacing
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 // MARK: - Folder mode (drill-in with breadcrumb)
 
 extension MediaTab {

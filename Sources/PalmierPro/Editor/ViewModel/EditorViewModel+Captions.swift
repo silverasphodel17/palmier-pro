@@ -119,12 +119,22 @@ extension EditorViewModel {
     private func transcribe(_ targets: [CaptionTarget], request: CaptionRequest) async throws -> [String: TranscriptionResult] {
         var results: [String: TranscriptionResult] = [:]
         var firstError: Error?
+        // The analysis cache only stores default-option transcripts.
+        let canUseCache = !request.censorProfanity && request.locale == nil
         for t in targets where results[t.clip.mediaRef] == nil {
             do {
                 guard let url = mediaResolver.resolveURL(for: t.clip.mediaRef) else { continue }
-                results[t.clip.mediaRef] = captionUsesVideoAudioExtraction(for: t.clip)
-                    ? try await Transcription.transcribeVideoAudio(videoURL: url, censorProfanity: request.censorProfanity, preferredLocale: request.locale)
-                    : try await Transcription.transcribe(fileURL: url, censorProfanity: request.censorProfanity, preferredLocale: request.locale)
+                let usesExtraction = captionUsesVideoAudioExtraction(for: t.clip)
+                if canUseCache {
+                    results[t.clip.mediaRef] = try await AnalysisStore.cachedOrTranscribe(
+                        fileURL: url, type: usesExtraction ? .video : .audio,
+                        assetId: t.clip.mediaRef, projectURL: projectURL
+                    )
+                } else {
+                    results[t.clip.mediaRef] = usesExtraction
+                        ? try await Transcription.transcribeVideoAudio(videoURL: url, censorProfanity: request.censorProfanity, preferredLocale: request.locale)
+                        : try await Transcription.transcribe(fileURL: url, censorProfanity: request.censorProfanity, preferredLocale: request.locale)
+                }
             } catch {
                 firstError = firstError ?? error
             }

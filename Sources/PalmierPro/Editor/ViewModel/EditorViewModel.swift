@@ -123,6 +123,7 @@ final class EditorViewModel {
 
     let generationService = GenerationService()
     let agentService = AgentService()
+    let mediaIndexer = MediaIndexer()
 
     var agentPanelVisible: Bool = {
         UserDefaults.standard.object(forKey: "agentPanelVisible") as? Bool ?? false
@@ -168,6 +169,7 @@ final class EditorViewModel {
             projectURL: { [weak self] in self?.projectURL }
         )
         agentService.editor = self
+        mediaIndexer.editor = self
     }
 
     // MARK: - Document bridge

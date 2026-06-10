@@ -35,6 +35,9 @@ enum AgentInstructions {
           (sample frames + audio transcript), and audio (transcript with per-word timestamps \
           and event tags). Use those timestamps to plan splits, trims, and captions on word \
           boundaries.
+        - To find a specific moment across the library ("the shot with the bridge", "where \
+          she says budget"), use search_media — it returns time segments you can place \
+          directly with add_clips instead of inspecting every asset.
 
         # Editing
         - Placements must match track type: video on video tracks, audio on audio tracks.

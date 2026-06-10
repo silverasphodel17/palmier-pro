@@ -29,6 +29,11 @@ struct MediaTab: View {
     @State var marqueeSelection = MarqueeSelection()
 
     @State private var mediaPanelHeight: CGFloat = 600
+    @State var mediaPanelWidth: CGFloat = 320
+    @State var semanticResults = SearchResults()
+    @State var librarySectionCollapsed = false
+    @State var visualSectionCollapsed = false
+    @State var spokenSectionCollapsed = false
 
     enum ViewMode: String, CaseIterable {
         case folder, flat, grouped
@@ -85,35 +90,18 @@ struct MediaTab: View {
                 swapBanner
             }
 
-            ZStack(alignment: .top) {
-                MediaPanelDropArea(
-                    isTargeted: $isDropTargeted,
-                    onDrop: { urls in handlePanelFinderDrop(urls: urls) }
-                ) {
-                    VStack(spacing: 0) {
-                        if showsEmptyState {
-                            emptyStateView
-                        } else {
-                            VStack(spacing: 0) {
-                                switch viewMode {
-                                case .folder: mediaGridView
-                                case .flat: flatGridView
-                                case .grouped: groupedGridView
-                                }
-                            }
-                        }
+            mediaDropArea {
+                if semanticQueryActive {
+                    unifiedMediaScrollArea
+                } else if showsEmptyState {
+                    emptyStateView
+                } else {
+                    switch viewMode {
+                    case .folder: mediaGridView
+                    case .flat: flatGridView
+                    case .grouped: groupedGridView
                     }
                 }
-                .overlay {
-                    if isDropTargeted { dropHighlight.allowsHitTesting(false) }
-                }
-                .overlay(alignment: .bottom) {
-                    if let toast = editor.mediaPanelToast {
-                        toastBanner(toast)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .animation(.easeInOut(duration: AppTheme.Anim.transition), value: editor.mediaPanelToast)
             }
             .layoutPriority(1)
 
@@ -127,6 +115,11 @@ struct MediaTab: View {
             proxy.size.height
         } action: { newValue in
             mediaPanelHeight = newValue
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newValue in
+            mediaPanelWidth = newValue
         }
         .onExitCommand { if editor.pendingSwapClipId != nil { editor.cancelMediaSwap() } }
         .background(KeyCommandSink(onNewFolder: createNewFolderInCurrent, onNavigateUp: navigateUp))
@@ -146,6 +139,22 @@ struct MediaTab: View {
         }
         .onChange(of: currentFolderId, initial: true) { _, folderId in
             editor.mediaPanelCurrentFolderId = folderId
+        }
+        .task(id: semanticSearchKey) {
+            guard semanticQueryActive else {
+                semanticResults = SearchResults()
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            await EmbeddingService.shared.prepare()
+            editor.mediaIndexer.indexAllPending()
+            semanticResults = await editor.mediaIndexer.search(query: trimmedSearchQuery)
+        }
+        .onChange(of: EmbeddingService.shared.visualState) { _, state in
+            guard state == .ready, semanticQueryActive else { return }
+            editor.mediaIndexer.resetFailures()
+            editor.mediaIndexer.indexAllPending()
         }
     }
 
@@ -415,11 +424,42 @@ struct MediaTab: View {
 
     // MARK: - Selection / state derivations
 
+    var trimmedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Segment search needs a real query, not a stray keystroke.
+    var semanticQueryActive: Bool {
+        trimmedSearchQuery.count >= 2
+    }
+
+    private func mediaDropArea<Content: View>(@ViewBuilder content: @escaping () -> Content) -> some View {
+        ZStack(alignment: .top) {
+            MediaPanelDropArea(
+                isTargeted: $isDropTargeted,
+                onDrop: { urls in handlePanelFinderDrop(urls: urls) }
+            ) {
+                content()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .overlay {
+                if isDropTargeted { dropHighlight.allowsHitTesting(false) }
+            }
+            .overlay(alignment: .bottom) {
+                if let toast = editor.mediaPanelToast {
+                    toastBanner(toast)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: AppTheme.Anim.transition), value: editor.mediaPanelToast)
+        }
+    }
+
     var selectedMediaAssetsInOrder: [MediaAsset] {
         editor.mediaAssets.filter { editor.selectedMediaAssetIds.contains($0.id) }
     }
 
-    private var showsEmptyState: Bool {
+    var showsEmptyState: Bool {
         editor.mediaAssets.isEmpty && editor.folders.isEmpty && !editor.showGenerationPanel
     }
 
@@ -709,7 +749,7 @@ struct MediaTab: View {
 
     // MARK: - Empty state + drop highlight
 
-    private var emptyStateView: some View {
+    var emptyStateView: some View {
         VStack(spacing: AppTheme.Spacing.lg) {
             Spacer()
 

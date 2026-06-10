@@ -19,6 +19,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case importMedia = "import_media"
     case listModels = "list_models"
     case inspectMedia = "inspect_media"
+    case searchMedia = "search_media"
     case listFolders = "list_folders"
     case createFolder = "create_folder"
     case moveToFolder = "move_to_folder"
@@ -57,6 +58,17 @@ enum ToolDefinitions {
                     "maxFrames": ["type": "integer", "description": "Video only. Number of sample frames to return (default 6, cap 12)."],
                 ],
                 required: ["mediaRef"]
+            )
+        ),
+        AgentTool(
+            name: .searchMedia,
+            description: "Semantic search over the project's media library, fully on-device. Returns specific time segments ('moments'), not just whole files: spoken-word matches from transcripts (with the matching snippet) and visual matches from frame content. Use it to find e.g. 'the shot where the bridge appears' or 'where she says budget', then place exactly that segment with add_clips (startSeconds/endSeconds map to trimStartFrame = startSeconds*fps and durationFrames = (endSeconds-startSeconds)*fps). Hits are sorted by relevance. Indexing runs in the background after import; pendingAssets > 0 means results may still be incomplete — retry shortly for full coverage. visualSearch reports whether the visual model is installed; when 'notInstalled', only spoken matches are returned.",
+            inputSchema: objectSchema(
+                properties: [
+                    "query": ["type": "string", "description": "Natural-language description of what to find (spoken phrase or visual content)."],
+                    "maxResults": ["type": "integer", "description": "Maximum number of hits to return (default 15, cap 30)."],
+                ],
+                required: ["query"]
             )
         ),
         AgentTool(

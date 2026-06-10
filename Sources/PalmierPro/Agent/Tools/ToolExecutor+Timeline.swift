@@ -195,7 +195,9 @@ extension ToolExecutor {
 
         if asset.hasAudio {
             do {
-                let transcript = try await Transcription.transcribeVideoAudio(videoURL: asset.url)
+                let transcript = try await AnalysisStore.cachedOrTranscribe(
+                    fileURL: asset.url, type: .video, assetId: asset.id, projectURL: editor.projectURL
+                )
                 meta["transcription"] = Self.transcriptionMeta(from: transcript, mapping: mapping)
             } catch {
                 Log.transcription.error("video transcription failed: \(error.localizedDescription)")
@@ -218,7 +220,9 @@ extension ToolExecutor {
     private func readAudio(editor: EditorViewModel, asset: MediaAsset, mapping: (clip: Clip, fps: Int)? = nil) async throws -> ToolResult {
         let transcript: TranscriptionResult
         do {
-            transcript = try await Transcription.transcribe(fileURL: asset.url)
+            transcript = try await AnalysisStore.cachedOrTranscribe(
+                fileURL: asset.url, type: .audio, assetId: asset.id, projectURL: editor.projectURL
+            )
         } catch {
             throw ToolError("Transcription failed: \(error.localizedDescription)")
         }

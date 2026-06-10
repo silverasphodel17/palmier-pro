@@ -20,8 +20,28 @@ extension MediaTab {
         assetDragScheme + id
     }
 
+    /// Segment drags carry source-seconds in/out points as a `#start-end` fragment,
+    /// so a drop places a pre-trimmed clip.
+    static func assetDragString(forAssetId id: String, segmentStart: Double, segmentEnd: Double) -> String {
+        assetDragScheme + id + "#" + String(format: "%.3f-%.3f", segmentStart, segmentEnd)
+    }
+
     static func assetId(fromDragString line: String) -> String? {
-        line.hasPrefix(assetDragScheme) ? String(line.dropFirst(assetDragScheme.count)) : nil
+        guard line.hasPrefix(assetDragScheme) else { return nil }
+        let body = line.dropFirst(assetDragScheme.count)
+        guard let hash = body.firstIndex(of: "#") else { return String(body) }
+        return String(body[..<hash])
+    }
+
+    static func assetSegment(fromDragString line: String) -> (start: Double, end: Double)? {
+        guard line.hasPrefix(assetDragScheme) else { return nil }
+        let body = line.dropFirst(assetDragScheme.count)
+        guard let hash = body.firstIndex(of: "#") else { return nil }
+        let parts = body[body.index(after: hash)...].split(separator: "-")
+        guard parts.count == 2,
+              let start = Double(parts[0]), let end = Double(parts[1]),
+              start >= 0, end > start else { return nil }
+        return (start, end)
     }
 }
 

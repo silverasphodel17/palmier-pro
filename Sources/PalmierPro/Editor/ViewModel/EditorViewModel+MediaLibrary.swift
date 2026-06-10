@@ -14,6 +14,21 @@ enum MediaPanelItemKey {
     }
 }
 
+/// A dragged media asset, optionally limited to a source-seconds segment
+/// (e.g. a semantic search "moment") so the drop places a pre-trimmed clip.
+struct DraggedAssetRef {
+    let asset: MediaAsset
+    let segment: (start: Double, end: Double)?
+
+    @MainActor
+    func durationFrames(fps: Int) -> Int {
+        if let segment {
+            return max(1, secondsToFrame(seconds: segment.end - segment.start, fps: fps))
+        }
+        return max(1, secondsToFrame(seconds: asset.duration, fps: fps))
+    }
+}
+
 /// Media library bookkeeping: import, rename, and manifest metadata sync for
 /// the in-memory asset catalog and the persisted `MediaManifest`.
 extension EditorViewModel {
@@ -28,9 +43,17 @@ extension EditorViewModel {
 
     /// Resolve a drag pasteboard payload (one `palmier-asset://<id>` per line).
     func assetsFromDragPayload(_ payload: String) -> [MediaAsset] {
+        assetRefsFromDragPayload(payload).map(\.asset)
+    }
+
+    /// Like `assetsFromDragPayload`, but preserves any `#start-end` segment fragment
+    /// (source seconds) so drops can place pre-trimmed clips.
+    func assetRefsFromDragPayload(_ payload: String) -> [DraggedAssetRef] {
         payload.split(separator: "\n").compactMap { line in
-            guard let id = MediaTab.assetId(fromDragString: String(line)) else { return nil }
-            return mediaAssets.first { $0.id == id }
+            let string = String(line)
+            guard let id = MediaTab.assetId(fromDragString: string),
+                  let asset = mediaAssets.first(where: { $0.id == id }) else { return nil }
+            return DraggedAssetRef(asset: asset, segment: MediaTab.assetSegment(fromDragString: string))
         }
     }
 
@@ -326,6 +349,7 @@ extension EditorViewModel {
         case .text:
             break
         }
+        mediaIndexer.schedule(assetId: asset.id)
     }
 
     struct TextClipSpec {

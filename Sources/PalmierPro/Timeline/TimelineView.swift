@@ -34,7 +34,7 @@ final class TimelineView: NSView {
     private static let trackBg = AppTheme.Background.surface.cgColor
 
     var externalDropTarget: TrackDropTarget?
-    var externalDragAssets: [MediaAsset]?
+    var externalDragRefs: [DraggedAssetRef]?
     var externalDragFrame: Int = 0
 
     private var externalSnapState = SnapEngine.SnapState()
@@ -172,8 +172,8 @@ final class TimelineView: NSView {
         drawGapSelection(geometry: geo, context: ctx)
         syncGeneratingClipOverlays(geometry: geo)
 
-        if let assets = externalDragAssets, !assets.isEmpty, let target = externalDropTarget {
-            drawExternalDragGhosts(assets: assets, target: target, frame: externalDragFrame, geometry: geo, dirtyRect: bounds, context: ctx)
+        if let refs = externalDragRefs, !refs.isEmpty, let target = externalDropTarget {
+            drawExternalDragGhosts(refs: refs, target: target, frame: externalDragFrame, geometry: geo, dirtyRect: bounds, context: ctx)
             if externalDragIsRippleInsert {
                 drawRippleInsertIndicator(atFrame: externalDragFrame, geometry: geo, context: ctx)
             }
@@ -447,7 +447,7 @@ final class TimelineView: NSView {
     // MARK: - External drag ghost clips
 
     private func drawExternalDragGhosts(
-        assets: [MediaAsset],
+        refs: [DraggedAssetRef],
         target: TrackDropTarget,
         frame: Int,
         geometry geo: TimelineGeometry,
@@ -455,7 +455,7 @@ final class TimelineView: NSView {
         context ctx: CGContext
     ) {
         let h = Layout.trackHeight
-        let plan = editor.resolveDropPlan(cursor: target, assets: assets, atFrame: frame)
+        let plan = editor.resolveDropPlan(cursor: target, refs: refs, atFrame: frame)
 
         struct Ghost {
             let clip: Clip
@@ -840,8 +840,8 @@ final class TimelineView: NSView {
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         let point = convert(sender.draggingLocation, from: nil)
         let geo = geometry
-        if externalDragAssets == nil, let urlString = sender.draggingPasteboard.string(forType: .string) {
-            externalDragAssets = editor.assetsFromDragPayload(urlString)
+        if externalDragRefs == nil, let urlString = sender.draggingPasteboard.string(forType: .string) {
+            externalDragRefs = editor.assetRefsFromDragPayload(urlString)
         }
         externalDropTarget = geo.dropTargetAt(y: point.y)
         externalSnapState = SnapEngine.SnapState()
@@ -863,7 +863,7 @@ final class TimelineView: NSView {
 
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {
         externalDropTarget = nil
-        externalDragAssets = nil
+        externalDragRefs = nil
         snapOverlay.setExternalX(nil)
         externalSnapState = SnapEngine.SnapState()
         externalDragIsRippleInsert = false
@@ -872,12 +872,12 @@ final class TimelineView: NSView {
 
     private func applyExternalSnap(at point: NSPoint, geo: TimelineGeometry) -> Int {
         let candidate = geo.frameAt(x: point.x)
-        guard let assets = externalDragAssets, !assets.isEmpty else {
+        guard let refs = externalDragRefs, !refs.isEmpty else {
             snapOverlay.setExternalX(nil)
             return candidate
         }
         let fps = editor.timeline.fps
-        let totalDur = assets.reduce(0) { $0 + max(1, secondsToFrame(seconds: $1.duration, fps: fps)) }
+        let totalDur = refs.reduce(0) { $0 + $1.durationFrames(fps: fps) }
         let targets = SnapEngine.collectTargets(
             tracks: editor.timeline.tracks
         )
@@ -903,7 +903,7 @@ final class TimelineView: NSView {
         let targetFrame = applyExternalSnap(at: point, geo: geo)
 
         externalDropTarget = nil
-        externalDragAssets = nil
+        externalDragRefs = nil
         snapOverlay.setExternalX(nil)
         externalSnapState = SnapEngine.SnapState()
         externalDragIsRippleInsert = false
@@ -911,40 +911,40 @@ final class TimelineView: NSView {
         guard let urlString = sender.draggingPasteboard.string(forType: .string) else { return false }
 
         let editor = self.editor
-        let assets = editor.assetsFromDragPayload(urlString)
-        guard !assets.isEmpty else { return false }
+        let refs = editor.assetRefsFromDragPayload(urlString)
+        guard !refs.isEmpty else { return false }
 
         let mods = NSEvent.modifierFlags
 
         let operation: @MainActor () -> Void = {
             editor.undoManager?.beginUndoGrouping()
 
-            let plan = editor.resolveDropPlan(cursor: cursorTarget, assets: assets, atFrame: targetFrame)
+            let plan = editor.resolveDropPlan(cursor: cursorTarget, refs: refs, atFrame: targetFrame)
             let (visualIdx, audioIdx) = editor.materialize(plan: plan)
             let ripple = mods.contains(.command)
 
-            let insert: ([MediaAsset], Int, Int?) -> Void = { assets, trackIdx, linkedAudio in
+            let insert: ([DraggedAssetRef], Int, Int?) -> Void = { refs, trackIdx, linkedAudio in
                 if ripple {
-                    editor.rippleInsertClips(assets: assets, trackIndex: trackIdx, atFrame: targetFrame)
+                    editor.rippleInsertClips(refs: refs, trackIndex: trackIdx, atFrame: targetFrame)
                 } else {
-                    editor.addClips(assets: assets, trackIndex: trackIdx, startFrame: targetFrame, linkedAudioTrackIndex: linkedAudio)
+                    editor.addClips(refs: refs, trackIndex: trackIdx, startFrame: targetFrame, linkedAudioTrackIndex: linkedAudio)
                 }
             }
 
-            let visualAssets = assets.filter { $0.type.isVisual }
-            if !visualAssets.isEmpty, let vIdx = visualIdx {
-                insert(visualAssets, vIdx, audioIdx)
+            let visualRefs = refs.filter { $0.asset.type.isVisual }
+            if !visualRefs.isEmpty, let vIdx = visualIdx {
+                insert(visualRefs, vIdx, audioIdx)
             }
-            let audioOnlyAssets = assets.filter { $0.type == .audio }
-            if !audioOnlyAssets.isEmpty, let aIdx = audioIdx {
-                insert(audioOnlyAssets, aIdx, nil)
+            let audioOnlyRefs = refs.filter { $0.asset.type == .audio }
+            if !audioOnlyRefs.isEmpty, let aIdx = audioIdx {
+                insert(audioOnlyRefs, aIdx, nil)
             }
 
             editor.undoManager?.endUndoGrouping()
             editor.undoManager?.setActionName("Add Clips")
         }
 
-        editor.addClipsWithSettingsCheck(assets: assets, operation: operation)
+        editor.addClipsWithSettingsCheck(assets: refs.map(\.asset), operation: operation)
 
         needsDisplay = true
         return true

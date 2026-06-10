@@ -243,6 +243,14 @@ enum AppTheme {
     enum MediaPanel {
         static let tabRailWidth: CGFloat = IconSize.lg + Spacing.sm * 2
         static let contextRowHeight: CGFloat = IconSize.md
+        static let emptyStateMinHeight: CGFloat = 240
+    }
+
+    enum Moments {
+        static let thumbWidth: CGFloat = 48
+        static let thumbHeight: CGFloat = 27
+        static let snippetHeight: CGFloat = 36
+        static let indexingBarWidth: CGFloat = 72
     }
 
     // MARK: - Shadows

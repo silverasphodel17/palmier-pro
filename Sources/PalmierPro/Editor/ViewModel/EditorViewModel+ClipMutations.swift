@@ -39,6 +39,69 @@ extension EditorViewModel {
         }
     }
 
+    /// Segment-aware variant of `addClips(assets:)`: refs with a segment land
+    /// pre-trimmed to that source range.
+    func addClips(refs: [DraggedAssetRef], trackIndex: Int, startFrame: Int, linkedAudioTrackIndex: Int? = nil) {
+        guard timeline.tracks.indices.contains(trackIndex) else { return }
+        let visualTrackId = timeline.tracks[trackIndex].id
+        let audioTrackId: String? = linkedAudioTrackIndex.flatMap {
+            timeline.tracks.indices.contains($0) ? timeline.tracks[$0].id : nil
+        }
+
+        withTimelineSwap(actionName: "Add Clips") {
+            let fps = timeline.fps
+            let totalDur = refs.reduce(0) { $0 + $1.durationFrames(fps: fps) }
+            clearRegion(trackIndex: trackIndex, start: startFrame, end: startFrame + totalDur, prune: false)
+            if let aid = audioTrackId,
+               let audioIdx = timeline.tracks.firstIndex(where: { $0.id == aid }) {
+                clearRegion(trackIndex: audioIdx, start: startFrame, end: startFrame + totalDur, prune: false)
+            }
+
+            guard let resolvedTrackIndex = timeline.tracks.firstIndex(where: { $0.id == visualTrackId }) else {
+                pruneEmptyTracks()
+                return
+            }
+            let resolvedAudioIndex: Int? = audioTrackId.flatMap { id in
+                timeline.tracks.firstIndex(where: { $0.id == id })
+            }
+
+            placeRefs(refs, trackIndex: resolvedTrackIndex, startFrame: startFrame, linkedAudioTrackIndex: resolvedAudioIndex)
+            sortClips(trackIndex: resolvedTrackIndex)
+            pruneEmptyTracks()
+        }
+    }
+
+    /// Places refs sequentially, applying segment trims. Callers clear the target range.
+    @discardableResult
+    func placeRefs(
+        _ refs: [DraggedAssetRef],
+        trackIndex: Int,
+        startFrame: Int,
+        linkedAudioTrackIndex: Int? = nil
+    ) -> [String] {
+        let fps = timeline.fps
+        var cursor = startFrame
+        var allIds: [String] = []
+        for ref in refs {
+            let duration = ref.durationFrames(fps: fps)
+            let ids = placeClip(
+                asset: ref.asset, trackIndex: trackIndex, startFrame: cursor,
+                durationFrames: duration, linkedAudioTrackIndex: linkedAudioTrackIndex
+            )
+            if let segment = ref.segment {
+                let trim = max(0, secondsToFrame(seconds: segment.start, fps: fps))
+                for id in ids {
+                    if let loc = findClip(id: id) {
+                        timeline.tracks[loc.trackIndex].clips[loc.clipIndex].trimStartFrame = trim
+                    }
+                }
+            }
+            allIds.append(contentsOf: ids)
+            cursor += duration
+        }
+        return allIds
+    }
+
     /// Moved clips share a single delta from the drag, so they don't collide with each other.
     func moveClips(_ moves: [(clipId: String, toTrack: Int, toFrame: Int)]) {
         guard !moves.isEmpty else { return }
