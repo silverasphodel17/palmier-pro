@@ -8,6 +8,9 @@ enum SpokenSearch {
         let text: String
     }
 
+    private static let semanticFloor: Float = 0.55
+    private static let maxSemantic = 3
+
     static func search(
         query: String, assets: [(id: String, url: URL)], limit: Int = 20
     ) async -> [Hit] {
@@ -29,10 +32,56 @@ enum SpokenSearch {
         var semantic: [VisualSearch.Hit] = []
         for (family, indexes) in byFamily {
             guard let queryVector = await SpokenEmbedder.shared.vector(for: query, family: family) else { continue }
-            semantic += VisualSearch.search(query: queryVector, indexes: indexes, limit: limit)
+            semantic += rankCentered(query: queryVector, indexes: indexes)
         }
-        semantic.sort { $0.score > $1.score }
+        semantic = semantic.filter { $0.score >= semanticFloor }.sorted { $0.score > $1.score }
+        semantic = Array(semantic.prefix(maxSemantic))
         return merge(keyword: keyword, semantic: semantic, transcripts: transcripts, limit: limit)
+    }
+
+    /// Ranks windows by mean-centered cosine: subtract the candidate set's mean vector from
+    /// the query and each window (removing the anisotropic common direction) before scoring.
+    private static func rankCentered(
+        query: [Float], indexes: [(String, EmbeddingStore.AssetIndex)]
+    ) -> [VisualSearch.Hit] {
+        guard let dim = indexes.first?.1.header.dim else { return [] }
+        var mean = [Float](repeating: 0, count: dim)
+        var count = 0
+        for (_, idx) in indexes where idx.header.dim == dim {
+            for i in 0..<idx.header.count {
+                let base = i * dim
+                for d in 0..<dim { mean[d] += idx.vectors[base + d] }
+                count += 1
+            }
+        }
+        guard count > 0 else { return [] }
+        for d in 0..<dim { mean[d] /= Float(count) }
+
+        let q = centered(query, mean: mean)
+        var hits: [VisualSearch.Hit] = []
+        for (assetID, idx) in indexes where idx.header.dim == dim {
+            for i in 0..<idx.header.count {
+                let base = i * dim
+                let w = centered(Array(idx.vectors[base..<base + dim]), mean: mean)
+                var score: Float = 0
+                for d in 0..<dim { score += q[d] * w[d] }
+                let row = idx.rows[i]
+                hits.append(.init(assetID: assetID, time: row.time,
+                                  shotStart: row.shotStart, shotEnd: row.shotEnd, score: score))
+            }
+        }
+        return hits
+    }
+
+    /// v - mean, L2-normalized.
+    private static func centered(_ v: [Float], mean: [Float]) -> [Float] {
+        var out = [Float](repeating: 0, count: v.count)
+        var norm: Float = 0
+        for i in 0..<v.count { let c = v[i] - mean[i]; out[i] = c; norm += c * c }
+        norm = norm.squareRoot()
+        guard norm > 0 else { return out }
+        for i in 0..<out.count { out[i] /= norm }
+        return out
     }
 
     /// Appends semantic hits below the keyword tier, skipping segments keyword already found.
