@@ -283,13 +283,15 @@ final class SearchIndexCoordinator {
 
     // MARK: - Query
 
-    func search(query: String, limit: Int = 20) async -> [VisualSearch.Hit] {
+    func search(query: String, limit: Int = 20, within ids: Set<String>? = nil) async -> [VisualSearch.Hit] {
         guard let model, modelState == .ready else { return [] }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
         // Snapshot on main; stat/SHA256/file reads, encode, and ranking happen off-actor.
-        let candidates = assetsProvider().filter { $0.type == .video || $0.type == .image }.map { ($0.id, $0.url) }
+        let candidates = assetsProvider()
+            .filter { ($0.type == .video || $0.type == .image) && (ids?.contains($0.id) ?? true) }
+            .map { ($0.id, $0.url) }
         let cached = loadedIndexes
 
         let (hits, loaded) = await Task.detached(priority: .userInitiated) {

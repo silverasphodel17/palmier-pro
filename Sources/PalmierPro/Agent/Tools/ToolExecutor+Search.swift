@@ -1,0 +1,103 @@
+import Foundation
+
+extension ToolExecutor {
+    private static let searchMediaAllowedKeys: Set<String> = ["query", "scope", "mediaRef", "limit"]
+
+    func searchMedia(_ editor: EditorViewModel, _ args: [String: Any]) async throws -> ToolResult {
+        try validateUnknownKeys(args, allowed: Self.searchMediaAllowedKeys, path: "search_media")
+        let query = try args.requireString("query").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { throw ToolError("search_media: query is empty") }
+        let scope = args.string("scope") ?? "both"
+        guard ["visual", "spoken", "both"].contains(scope) else {
+            throw ToolError("search_media: scope must be visual, spoken, or both (got '\(scope)')")
+        }
+        let limit = min(max(args.int("limit") ?? 10, 1), 50)
+        var restrict: Set<String>?
+        if let ref = args.string("mediaRef") {
+            restrict = [try asset(ref, editor: editor).id]
+        }
+
+        var payload: [String: Any] = [:]
+        if scope != "spoken" {
+            payload.merge(await visualResults(editor, query: query, limit: limit, restrict: restrict)) { _, new in new }
+        }
+        if scope != "visual" {
+            payload["spoken"] = await spokenResults(editor, query: query, limit: limit, restrict: restrict)
+        }
+
+        guard let json = Self.jsonString(roundJSONFloatingPointNumbers(payload, toPlaces: 3)) else {
+            throw ToolError("search_media: failed to encode results")
+        }
+        return .ok(json)
+    }
+
+    private func visualResults(
+        _ editor: EditorViewModel, query: String, limit: Int, restrict: Set<String>?
+    ) async -> [String: Any] {
+        let coordinator = editor.searchIndex
+        if coordinator.enabled, coordinator.modelState == .unknown {
+            await coordinator.prepare()
+        }
+
+        var payload: [String: Any] = ["status": Self.visualStatus(coordinator)]
+        let indexable = editor.mediaAssets.filter {
+            ($0.type == .video || $0.type == .image) && (restrict?.contains($0.id) ?? true)
+        }
+        payload["indexableAssets"] = indexable.count
+        if let spec = coordinator.model?.spec {
+            let urls = indexable.map(\.url)
+            payload["indexedAssets"] = await Task.detached {
+                urls.filter { !AssetIndexer.needsIndex(url: $0, spec: spec) }.count
+            }.value
+        }
+
+        let hits = await coordinator.search(query: query, limit: limit, within: restrict)
+        payload["moments"] = hits.map { hit -> [String: Any] in
+            let asset = editor.mediaAssets.first { $0.id == hit.assetID }
+            var entry: [String: Any] = [
+                "mediaRef": hit.assetID,
+                "name": asset?.name ?? "",
+                "score": Double(hit.score),
+            ]
+            if asset?.type == .image {
+                entry["type"] = "image"
+            } else {
+                entry["startSeconds"] = hit.shotStart
+                entry["endSeconds"] = hit.shotEnd
+            }
+            return entry
+        }
+        return payload
+    }
+
+    private func spokenResults(
+        _ editor: EditorViewModel, query: String, limit: Int, restrict: Set<String>?
+    ) async -> [[String: Any]] {
+        let candidates = editor.mediaAssets
+            .filter { ($0.type == .video || $0.type == .audio) && (restrict?.contains($0.id) ?? true) }
+            .map { (id: $0.id, url: $0.url) }
+        let hits = await Task.detached(priority: .userInitiated) {
+            TranscriptSearch.search(query: query, assets: candidates, limit: limit)
+        }.value
+        return hits.map { hit in
+            [
+                "mediaRef": hit.assetID,
+                "name": editor.mediaAssets.first { $0.id == hit.assetID }?.name ?? "",
+                "startSeconds": hit.start,
+                "endSeconds": hit.end,
+                "text": hit.text,
+            ]
+        }
+    }
+
+    private static func visualStatus(_ coordinator: SearchIndexCoordinator) -> String {
+        guard coordinator.enabled else { return "disabled" }
+        switch coordinator.modelState {
+        case .ready: return coordinator.indexingActive ? "indexing" : "ready"
+        case .notInstalled: return "modelNotInstalled"
+        case .downloading: return "downloadingModel"
+        case .preparing, .unknown: return "preparing"
+        case .failed: return "failed"
+        }
+    }
+}
