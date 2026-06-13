@@ -3,8 +3,8 @@ import Foundation
 import ImageIO
 
 /// Indexes one asset: sampled frames → embeddings → EmbeddingStore. Idempotent per (file, model, sampler).
-enum AssetIndexer {
-    static func needsIndex(url: URL, spec: EmbeddingModel.Spec) -> Bool {
+enum VisualIndexer {
+    static func needsIndex(url: URL, spec: VisualEmbedder.Spec) -> Bool {
         guard let key = EmbeddingStore.key(for: url) else { return false }
         return !EmbeddingStore.isCurrent(
             key: key, model: spec.model, modelVersion: spec.version,
@@ -15,7 +15,7 @@ enum AssetIndexer {
     static func index(
         url: URL,
         duration: Double,
-        model: EmbeddingModel,
+        model: VisualEmbedder,
         options: FrameSampler.Options = .init(),
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws {
@@ -51,7 +51,7 @@ enum AssetIndexer {
     }
 
     /// Stills skip the sampler: one embedding, zero-length shot range.
-    static func indexImage(url: URL, model: EmbeddingModel) async throws {
+    static func indexImage(url: URL, model: VisualEmbedder) async throws {
         guard let key = EmbeddingStore.key(for: url) else { return }
         guard needsIndex(url: url, spec: model.spec) else { return }
         try await SearchIndexCoordinator.waitWhileExportActive()
@@ -76,7 +76,7 @@ enum AssetIndexer {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options)
     }
 
-    private static func save(rows: [EmbeddingStore.Row], vectors: [Float], spec: EmbeddingModel.Spec, key: String) throws {
+    private static func save(rows: [EmbeddingStore.Row], vectors: [Float], spec: VisualEmbedder.Spec, key: String) throws {
         let header = EmbeddingStore.Header(
             model: spec.model, modelVersion: spec.version,
             samplerVersion: FrameSampler.samplerVersion,

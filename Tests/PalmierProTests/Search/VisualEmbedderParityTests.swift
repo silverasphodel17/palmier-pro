@@ -6,8 +6,8 @@ import Testing
 @testable import PalmierPro
 
 /// Parity against Phase-0 golden vectors. Skips when models/siglip2/build artifacts are absent.
-@Suite("EmbeddingModel parity", .serialized)
-struct EmbeddingModelParityTests {
+@Suite("VisualEmbedder parity", .serialized)
+struct VisualEmbedderParityTests {
     static let buildDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -32,9 +32,9 @@ struct EmbeddingModelParityTests {
         return dot / (na * nb)
     }
 
-    static func loadModel() async throws -> EmbeddingModel {
+    static func loadModel() async throws -> VisualEmbedder {
         let manifest = try JSONDecoder().decode(
-            EmbeddingModel.Spec.self,
+            VisualEmbedder.Spec.self,
             from: Data(contentsOf: buildDir.appendingPathComponent("manifest.json"))
         )
         let tokenizer = try await TextTokenizer(
@@ -43,7 +43,7 @@ struct EmbeddingModelParityTests {
         )
         let imageURL = try await MLModel.compileModel(at: buildDir.appendingPathComponent("ImageEncoder.mlpackage"))
         let textURL = try await MLModel.compileModel(at: buildDir.appendingPathComponent("TextEncoder.mlpackage"))
-        return try EmbeddingModel(
+        return try VisualEmbedder(
             imageEncoderURL: imageURL, textEncoderURL: textURL,
             tokenizer: tokenizer, spec: manifest, computeUnits: .cpuOnly
         )

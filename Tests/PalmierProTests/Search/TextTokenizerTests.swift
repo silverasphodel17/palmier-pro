@@ -7,7 +7,7 @@ import Testing
 @Suite("TextTokenizer")
 struct TextTokenizerTests {
     static var tokenizerFolder: URL {
-        EmbeddingModelParityTests.buildDir.appendingPathComponent("tokenizer", isDirectory: true)
+        VisualEmbedderParityTests.buildDir.appendingPathComponent("tokenizer", isDirectory: true)
     }
     static var artifactsExist: Bool {
         FileManager.default.fileExists(atPath: tokenizerFolder.appendingPathComponent("tokenizer.json").path)

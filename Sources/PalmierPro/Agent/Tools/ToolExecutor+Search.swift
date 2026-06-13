@@ -47,7 +47,7 @@ extension ToolExecutor {
         if let spec = coordinator.model?.spec {
             let urls = indexable.map(\.url)
             payload["indexedAssets"] = await Task.detached {
-                urls.filter { !AssetIndexer.needsIndex(url: $0, spec: spec) }.count
+                urls.filter { !VisualIndexer.needsIndex(url: $0, spec: spec) }.count
             }.value
         }
 

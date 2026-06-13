@@ -3,7 +3,7 @@ import CoreVideo
 import CoreGraphics
 import Foundation
 
-final class EmbeddingModel: @unchecked Sendable {
+final class VisualEmbedder: @unchecked Sendable {
     struct Spec: Codable, Sendable {
         let model: String
         let version: Int

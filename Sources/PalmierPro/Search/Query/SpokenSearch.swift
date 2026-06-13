@@ -24,7 +24,7 @@ enum SpokenSearch {
 
         var semantic: [VisualSearch.Hit] = []
         for (family, indexes) in byFamily {
-            guard let queryVector = await SentenceEmbedder.shared.vector(for: query, family: family) else { continue }
+            guard let queryVector = await SpokenEmbedder.shared.vector(for: query, family: family) else { continue }
             semantic += VisualSearch.search(query: queryVector, indexes: indexes, limit: limit)
         }
         semantic.sort { $0.score > $1.score }

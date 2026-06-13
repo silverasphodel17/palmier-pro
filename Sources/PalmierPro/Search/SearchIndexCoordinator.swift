@@ -28,7 +28,7 @@ final class SearchIndexCoordinator {
 
     var assetsProvider: () -> [MediaAsset] = { [] }
 
-    @ObservationIgnored private(set) var model: EmbeddingModel?
+    @ObservationIgnored private(set) var model: VisualEmbedder?
     private let downloader = ModelDownloader()
     private var queue: [String] = []
     private var failedIds: Set<String> = []
@@ -117,7 +117,7 @@ final class SearchIndexCoordinator {
                     tokenizerFolder: installed.tokenizerFolder,
                     contextLength: installed.spec.contextLength
                 )
-                let model = try EmbeddingModel(
+                let model = try VisualEmbedder(
                     imageEncoderURL: installed.imageEncoderURL,
                     textEncoderURL: installed.textEncoderURL,
                     tokenizer: tokenizer,
@@ -217,7 +217,7 @@ final class SearchIndexCoordinator {
         guard enabled, let model, !asset.isGenerating else { return }
         guard !queue.contains(asset.id), !failedIds.contains(asset.id) else { return }
         let needsVisual = (asset.type == .video || asset.type == .image)
-            && AssetIndexer.needsIndex(url: asset.url, spec: model.spec)
+            && VisualIndexer.needsIndex(url: asset.url, spec: model.spec)
         let needsSpoken = Self.wantsTranscript(asset) && SpokenIndexer.needsIndex(url: asset.url)
         guard needsVisual || needsSpoken || needsTranscript(asset) else { return }
         queue.append(asset.id)
@@ -290,9 +290,9 @@ final class SearchIndexCoordinator {
             }()
             switch asset.type {
             case .image:
-                try await AssetIndexer.indexImage(url: url, model: model)
+                try await VisualIndexer.indexImage(url: url, model: model)
             case .video:
-                try await AssetIndexer.index(
+                try await VisualIndexer.index(
                     url: url, duration: asset.duration, model: model, progress: onProgress
                 )
             default:

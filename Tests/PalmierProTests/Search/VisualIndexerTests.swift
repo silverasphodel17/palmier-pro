@@ -6,9 +6,9 @@ import Testing
 
 /// End-to-end: fixture video → sample → embed → store → text query ranks the right shot.
 /// Requires Phase-0 artifacts; skipped otherwise.
-@Suite("AssetIndexer e2e", .serialized)
-struct AssetIndexerTests {
-    @Test(.enabled(if: EmbeddingModelParityTests.artifactsExist)) func indexesStillImage() async throws {
+@Suite("VisualIndexer e2e", .serialized)
+struct VisualIndexerTests {
+    @Test(.enabled(if: VisualEmbedderParityTests.artifactsExist)) func indexesStillImage() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("still-\(UUID().uuidString).png")
         try Self.writePNG(to: url)
         let key = try #require(EmbeddingStore.key(for: url))
@@ -17,9 +17,9 @@ struct AssetIndexerTests {
             try? FileManager.default.removeItem(at: EmbeddingStore.diskURL(key))
         }
 
-        let model = try await EmbeddingModelParityTests.loadModel()
-        try await AssetIndexer.indexImage(url: url, model: model)
-        #expect(!AssetIndexer.needsIndex(url: url, spec: model.spec))
+        let model = try await VisualEmbedderParityTests.loadModel()
+        try await VisualIndexer.indexImage(url: url, model: model)
+        #expect(!VisualIndexer.needsIndex(url: url, spec: model.spec))
 
         let index = try EmbeddingStore.load(key: key)
         #expect(index.rows.count == 1)
@@ -33,18 +33,18 @@ struct AssetIndexerTests {
             data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { throw NSError(domain: "AssetIndexerTests", code: 1) }
+        ) else { throw NSError(domain: "VisualIndexerTests", code: 1) }
         ctx.setFillColor(CGColor(red: 0.86, green: 0.12, blue: 0.12, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
         guard let image = ctx.makeImage(),
               let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
-            throw NSError(domain: "AssetIndexerTests", code: 2)
+            throw NSError(domain: "VisualIndexerTests", code: 2)
         }
         CGImageDestinationAddImage(dest, image, nil)
-        guard CGImageDestinationFinalize(dest) else { throw NSError(domain: "AssetIndexerTests", code: 3) }
+        guard CGImageDestinationFinalize(dest) else { throw NSError(domain: "VisualIndexerTests", code: 3) }
     }
 
-    @Test(.enabled(if: EmbeddingModelParityTests.artifactsExist)) func undecodableFileGetsEmptyIndex() async throws {
+    @Test(.enabled(if: VisualEmbedderParityTests.artifactsExist)) func undecodableFileGetsEmptyIndex() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("bogus-\(UUID().uuidString).mp4")
         try Data("not a video".utf8).write(to: url)
         let key = try #require(EmbeddingStore.key(for: url))
@@ -53,13 +53,13 @@ struct AssetIndexerTests {
             try? FileManager.default.removeItem(at: EmbeddingStore.diskURL(key))
         }
 
-        let model = try await EmbeddingModelParityTests.loadModel()
-        try await AssetIndexer.index(url: url, duration: 5, model: model)
-        #expect(!AssetIndexer.needsIndex(url: url, spec: model.spec))
+        let model = try await VisualEmbedderParityTests.loadModel()
+        try await VisualIndexer.index(url: url, duration: 5, model: model)
+        #expect(!VisualIndexer.needsIndex(url: url, spec: model.spec))
         #expect(try EmbeddingStore.load(key: key).rows.isEmpty)
     }
 
-    @Test(.enabled(if: EmbeddingModelParityTests.artifactsExist)) func indexAndSearchFixture() async throws {
+    @Test(.enabled(if: VisualEmbedderParityTests.artifactsExist)) func indexAndSearchFixture() async throws {
         let url = try await FixtureVideo.write(scenes: [
             .init(rgb: (30, 30, 220), seconds: 10),
             .init(rgb: (220, 30, 30), seconds: 10),
@@ -71,10 +71,10 @@ struct AssetIndexerTests {
             try? FileManager.default.removeItem(at: EmbeddingStore.diskURL(key))
         }
 
-        let model = try await EmbeddingModelParityTests.loadModel()
-        #expect(AssetIndexer.needsIndex(url: url, spec: model.spec))
-        try await AssetIndexer.index(url: url, duration: 30, model: model)
-        #expect(!AssetIndexer.needsIndex(url: url, spec: model.spec))
+        let model = try await VisualEmbedderParityTests.loadModel()
+        #expect(VisualIndexer.needsIndex(url: url, spec: model.spec))
+        try await VisualIndexer.index(url: url, duration: 30, model: model)
+        #expect(!VisualIndexer.needsIndex(url: url, spec: model.spec))
 
         let index = try EmbeddingStore.load(key: key)
         #expect(index.header.dim == model.spec.embeddingDim)

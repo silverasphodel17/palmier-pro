@@ -37,14 +37,14 @@ enum SpokenIndexer {
             return
         }
         // Model assets not ready: skip without writing so a later sweep retries.
-        guard let dim = await SentenceEmbedder.shared.dimension(family) else { return }
+        guard let dim = await SpokenEmbedder.shared.dimension(family) else { return }
 
         var rows: [EmbeddingStore.Row] = []
         var vectors: [Float] = []
         for window in SpokenWindowBuilder.windows(from: transcript) {
             try Task.checkCancellation()
             guard window.text.split(whereSeparator: \.isWhitespace).count >= Self.minSemanticWords else { continue }
-            guard let v = await SentenceEmbedder.shared.vector(for: window.text, family: family),
+            guard let v = await SpokenEmbedder.shared.vector(for: window.text, family: family),
                   v.count == dim else { continue }
             vectors += v
             rows.append(EmbeddingStore.Row(time: window.start, shotStart: window.start, shotEnd: window.end))

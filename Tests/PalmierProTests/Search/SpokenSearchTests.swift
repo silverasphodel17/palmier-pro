@@ -101,17 +101,17 @@ struct SpokenModelTests {
 }
 
 /// Requires the OS contextual-embedding assets; exits early when absent.
-@Suite("SentenceEmbedder", .serialized)
-struct SentenceEmbedderTests {
+@Suite("SpokenEmbedder", .serialized)
+struct SpokenEmbedderTests {
     @Test(.enabled(if: SpokenModel.latin.revision > 0)) func vectorsAreNormalizedAndSemantic() async throws {
-        guard let a = await SentenceEmbedder.shared.vector(for: "we discussed the quarterly budget", family: .latin) else {
+        guard let a = await SpokenEmbedder.shared.vector(for: "we discussed the quarterly budget", family: .latin) else {
             return // assets not downloaded on this machine
         }
         let norm = a.reduce(0) { $0 + $1 * $1 }
         #expect(abs(norm - 1) < 0.01)
 
-        let b = try #require(await SentenceEmbedder.shared.vector(for: "a conversation about company finances", family: .latin))
-        let c = try #require(await SentenceEmbedder.shared.vector(for: "a red sports car drifting", family: .latin))
+        let b = try #require(await SpokenEmbedder.shared.vector(for: "a conversation about company finances", family: .latin))
+        let c = try #require(await SpokenEmbedder.shared.vector(for: "a red sports car drifting", family: .latin))
         func dot(_ x: [Float], _ y: [Float]) -> Float { zip(x, y).reduce(0) { $0 + $1.0 * $1.1 } }
         #expect(dot(a, b) > dot(a, c), "related sentences should score higher")
     }

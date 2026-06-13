@@ -23,7 +23,7 @@ final class ModelDownloader: @unchecked Sendable {
         let contextLength: Int
         let files: Files
 
-        var spec: EmbeddingModel.Spec {
+        var spec: VisualEmbedder.Spec {
             .init(model: model, version: version, embeddingDim: embeddingDim,
                   imageSize: imageSize, contextLength: contextLength)
         }
@@ -33,7 +33,7 @@ final class ModelDownloader: @unchecked Sendable {
         let imageEncoderURL: URL
         let textEncoderURL: URL
         let tokenizerFolder: URL
-        let spec: EmbeddingModel.Spec
+        let spec: VisualEmbedder.Spec
     }
 
     enum DownloadError: Error {
