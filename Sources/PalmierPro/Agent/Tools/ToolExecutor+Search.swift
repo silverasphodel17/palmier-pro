@@ -76,9 +76,7 @@ extension ToolExecutor {
         let candidates = editor.mediaAssets
             .filter { ($0.type == .video || $0.type == .audio) && (restrict?.contains($0.id) ?? true) }
             .map { (id: $0.id, url: $0.url) }
-        let hits = await Task.detached(priority: .userInitiated) {
-            TranscriptSearch.search(query: query, assets: candidates, limit: limit)
-        }.value
+        let hits = await SpokenSearch.search(query: query, assets: candidates, limit: limit)
         return hits.map { hit in
             [
                 "mediaRef": hit.assetID,

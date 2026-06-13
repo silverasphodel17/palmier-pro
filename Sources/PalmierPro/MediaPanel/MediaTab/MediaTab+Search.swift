@@ -197,9 +197,7 @@ extension MediaTab {
         momentSearchTask = Task {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            let spoken = await Task.detached(priority: .userInitiated) {
-                TranscriptSearch.search(query: query, assets: assets)
-            }.value
+            let spoken = await SpokenSearch.search(query: query, assets: assets)
             let visual = await coordinator.search(query: query)
             guard !Task.isCancelled else { return }
             visualHits = visual

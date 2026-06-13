@@ -218,7 +218,8 @@ final class SearchIndexCoordinator {
         guard !queue.contains(asset.id), !failedIds.contains(asset.id) else { return }
         let needsVisual = (asset.type == .video || asset.type == .image)
             && AssetIndexer.needsIndex(url: asset.url, spec: model.spec)
-        guard needsVisual || needsTranscript(asset) else { return }
+        let needsSpoken = Self.wantsTranscript(asset) && SpokenIndexer.needsIndex(url: asset.url)
+        guard needsVisual || needsSpoken || needsTranscript(asset) else { return }
         queue.append(asset.id)
         batchTotal += 1
         ensureWorker()
@@ -281,9 +282,11 @@ final class SearchIndexCoordinator {
         let start = ContinuousClock.now
         do {
             async let transcriptDone: Void = {
-                guard transcribe else { return }
-                try await SearchIndexCoordinator.waitWhileExportActive()
-                _ = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideo, range: nil)
+                if transcribe {
+                    try await SearchIndexCoordinator.waitWhileExportActive()
+                    _ = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideo, range: nil)
+                }
+                try await SpokenIndexer.index(url: url)
             }()
             switch asset.type {
             case .image:
