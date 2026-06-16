@@ -143,6 +143,12 @@ struct ExportView: View {
                         Text("Text overlays, flips, and keyframe easing aren't included.")
                             .font(.system(size: AppTheme.FontSize.xs))
                             .foregroundStyle(AppTheme.Text.tertiaryColor)
+
+                        if !effectsSummary.isEmpty {
+                            Text(effectsSummary)
+                                .font(.system(size: AppTheme.FontSize.xs))
+                                .foregroundStyle(AppTheme.Status.errorColor)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, AppTheme.Spacing.sm)
@@ -283,6 +289,25 @@ struct ExportView: View {
     }
 
     /// Quick estimate for exporting a Palmier Project
+    /// "Effects on 3 clips (Exposure, LUT) aren't included." — XMEML has no representation.
+    private var effectsSummary: String {
+        var clipCount = 0
+        var names = Set<String>()
+        for track in editor.timeline.tracks {
+            for clip in track.clips {
+                let active = (clip.effects ?? []).filter(\.enabled)
+                guard !active.isEmpty else { continue }
+                clipCount += 1
+                for effect in active {
+                    names.insert(EffectRegistry.descriptor(id: effect.type)?.displayName ?? effect.type)
+                }
+            }
+        }
+        guard clipCount > 0 else { return "" }
+        let list = names.sorted().joined(separator: ", ")
+        return "Effects on \(clipCount) clip\(clipCount == 1 ? "" : "s") (\(list)) aren't included."
+    }
+
     private func computePalmierSummary() -> (collect: Int, missing: Int, bytes: Int64) {
         var collect = 0, missing = 0
         var bytes: Int64 = 0

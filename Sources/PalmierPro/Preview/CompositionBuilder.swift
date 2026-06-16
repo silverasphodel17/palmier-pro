@@ -346,7 +346,8 @@ enum CompositionBuilder {
         clipNaturalSizes: [String: CGSize] = [:],
         clipTransforms: [String: CGAffineTransform] = [:],
         compositionDuration: CMTime,
-        renderSize: CGSize
+        renderSize: CGSize,
+        useCICompositor: Bool = CompositionBuilder.useCICompositor
     ) -> (audioMix: AVMutableAudioMix, videoComposition: AVVideoComposition) {
         let timescale = CMTimeScale(timeline.fps)
 
@@ -368,6 +369,25 @@ enum CompositionBuilder {
                 prevEndFrame = clip.startFrame + clip.durationFrames
             }
             return params
+        }
+
+        var vcConfig = AVVideoComposition.Configuration()
+        vcConfig.renderSize = renderSize
+        vcConfig.frameDuration = CMTime(value: 1, timescale: timescale)
+
+        if useCICompositor {
+            // No output color tags: pixels pass through untouched, and tagging breaks
+            // ProRes 4444 alpha on macOS 26.
+            vcConfig.customVideoCompositorClass = PalmierVideoCompositor.self
+            vcConfig.instructions = compositorInstructions(
+                timeline: timeline,
+                trackMappings: trackMappings,
+                clipNaturalSizes: clipNaturalSizes,
+                clipTransforms: clipTransforms,
+                compositionDuration: compositionDuration,
+                renderSize: renderSize
+            )
+            return (audioMix, AVVideoComposition(configuration: vcConfig))
         }
 
         let layerInstructions: [AVVideoCompositionLayerInstruction] = trackMappings.filter { $0.isVideo }.map { mapping in
@@ -417,15 +437,82 @@ enum CompositionBuilder {
         instrConfig.layerInstructions = layerInstructions
         let instruction = AVVideoCompositionInstruction(configuration: instrConfig)
 
-        var vcConfig = AVVideoComposition.Configuration()
-        vcConfig.renderSize = renderSize
-        vcConfig.frameDuration = CMTime(value: 1, timescale: timescale)
         vcConfig.instructions = [instruction]
         vcConfig.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
         vcConfig.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
         vcConfig.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
 
         return (audioMix, AVVideoComposition(configuration: vcConfig))
+    }
+
+    /// Stock-instruction fallback kept alive for parity testing during the CI-compositor
+    /// migration; tests toggle this.
+    nonisolated(unsafe) static var useCICompositor = true
+
+    /// One CompositorInstruction per segment between clip boundaries, covering the
+    /// composition with no gaps or overlaps. Layers are ordered bottom → top; the
+    /// black background track is excluded (FrameRenderer synthesizes black).
+    private static func compositorInstructions(
+        timeline: Timeline,
+        trackMappings: [TrackMapping],
+        clipNaturalSizes: [String: CGSize],
+        clipTransforms: [String: CGAffineTransform],
+        compositionDuration: CMTime,
+        renderSize: CGSize
+    ) -> [CompositorInstruction] {
+        let timescale = CMTimeScale(timeline.fps)
+        struct Entry {
+            let start: CMTime
+            let end: CMTime
+            let plan: LayerPlan
+        }
+
+        // trackMappings order: timeline track 0 first (topmost), black background last.
+        var entries: [Entry] = []
+        for mapping in trackMappings.reversed() where mapping.isVideo {
+            guard case .timeline(let trackIndex, let clipIds) = mapping.kind,
+                  timeline.tracks.indices.contains(trackIndex) else { continue }
+            let track = timeline.tracks[trackIndex]
+            guard !track.hidden else { continue }
+            var prevEndFrame = Int.min
+            for clip in track.clips.sorted(by: { $0.startFrame < $1.startFrame })
+                where clip.mediaType != .text {
+                if let clipIds, !clipIds.contains(clip.id) { continue }
+                guard clip.durationFrames > 0, clip.startFrame >= prevEndFrame else { continue }
+                entries.append(Entry(
+                    start: CMTime(value: CMTimeValue(clip.startFrame), timescale: timescale),
+                    end: CMTime(value: CMTimeValue(clip.endFrame), timescale: timescale),
+                    plan: LayerPlan(
+                        trackID: mapping.compositionTrack.trackID,
+                        clip: clip,
+                        natSize: clipNaturalSizes[clip.id] ?? mapping.naturalSize,
+                        preferredTransform: clipTransforms[clip.id] ?? .identity
+                    )
+                ))
+                prevEndFrame = clip.endFrame
+            }
+        }
+
+        var cutSet = Set<CMTime>()
+        for e in entries {
+            cutSet.insert(e.start)
+            cutSet.insert(e.end)
+        }
+        let cuts = cutSet.filter { $0 > .zero && $0 < compositionDuration }.sorted()
+        let bounds = [.zero] + cuts + [compositionDuration]
+
+        var instructions: [CompositorInstruction] = []
+        for i in 0..<(bounds.count - 1) {
+            let range = CMTimeRange(start: bounds[i], end: bounds[i + 1])
+            guard range.duration > .zero else { continue }
+            let layers = entries
+                .filter { $0.start <= range.start && $0.end >= range.end }
+                .map(\.plan)
+            instructions.append(CompositorInstruction(
+                timeRange: range, layers: layers, renderSize: renderSize, fps: timeline.fps
+            ))
+        }
+        return instructions
     }
 
     /// Smooth-curve subdivision count for non-linear keyframe segments.

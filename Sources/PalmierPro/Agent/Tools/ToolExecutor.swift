@@ -35,6 +35,7 @@ final class ToolExecutor {
             case .moveClips:        return try moveClips(editor, args)
             case .setClipProperties: return try setClipProperties(editor, args)
             case .setKeyframes:     return try setKeyframes(editor, args)
+            case .setEffects:       return try setEffects(editor, args)
             case .splitClip:        return try splitClip(editor, args)
             case .addTexts:      return try addTexts(editor, args)
             case .addCaptions:   return try await addCaptions(editor, args)

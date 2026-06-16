@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct InspectorView: View {
     @Environment(EditorViewModel.self) var editor
@@ -7,6 +8,7 @@ struct InspectorView: View {
     enum ClipTab: String, Hashable {
         case text = "Text"
         case video = "Video"
+        case effects = "Effects"
         case audio = "Audio"
         case ai = "AI Edit"
     }
@@ -176,7 +178,10 @@ struct InspectorView: View {
 
         var tabs: [ClipTab] = []
         if isSingleText { tabs.append(.text) }
-        if !nonText.isEmpty { tabs.append(.video) }
+        if !nonText.isEmpty {
+            tabs.append(.video)
+            tabs.append(.effects)
+        }
         if !audios.isEmpty { tabs.append(.audio) }
         if aiEditEligible && !AccountService.shared.isMisconfigured { tabs.append(.ai) }
         return tabs
@@ -227,6 +232,8 @@ struct InspectorView: View {
                                 if let v = selectedVisualClip, v.mediaType == .text { TextTab(clip: v) }
                             case .video:
                                 videoTabContent()
+                            case .effects:
+                                effectsTabContent()
                             case .audio:
                                 audioTabContent()
                             case .ai, .none:
@@ -437,6 +444,383 @@ struct InspectorView: View {
         .frame(height: KeyframesMetrics.rowHeight)
     }
 
+
+    // MARK: - Effects Tab
+
+    /// Color adjustments shown as fixed rows (like Transform), each backed by a
+    /// singleton effect in the stack created/pruned on demand.
+    private struct ColorControl: Hashable {
+        let effectId: String
+        let paramKey: String
+    }
+
+    private var colorControls: [ColorControl] {
+        [
+            ColorControl(effectId: "color.exposure", paramKey: "ev"),
+            ColorControl(effectId: "color.contrast", paramKey: "amount"),
+            ColorControl(effectId: "color.saturation", paramKey: "amount"),
+            ColorControl(effectId: "color.temperature", paramKey: "temperature"),
+            ColorControl(effectId: "color.temperature", paramKey: "tint"),
+            ColorControl(effectId: "color.highlightsShadows", paramKey: "highlights"),
+            ColorControl(effectId: "color.highlightsShadows", paramKey: "shadows"),
+        ]
+    }
+
+    /// Canonical render order for the always-on color effects; also marks which
+    /// effect ids the Color section owns (vs. the discretionary stack below).
+    private var colorEffectOrder: [String] {
+        ["color.exposure", "color.contrast", "color.saturation", "color.temperature", "color.highlightsShadows"]
+    }
+
+    private func isColorManaged(_ effectId: String) -> Bool {
+        colorEffectOrder.contains(effectId)
+    }
+
+    @ViewBuilder
+    private func effectsTabContent() -> some View {
+        let clips = nonTextVisualClips
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
+            colorSection(clips: clips)
+            effectsStackSection(clips: clips)
+        }
+    }
+
+    // MARK: Color section (always present)
+
+    @ViewBuilder
+    private func colorSection(clips: [Clip]) -> some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            HStack {
+                sectionTitleLabel(title: "Color")
+                Spacer()
+                if anyColorAdjusted(clips) {
+                    resetButton(onReset: { resetColor(clips: clips) }, help: "Reset color")
+                }
+            }
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+                ForEach(colorControls, id: \.self) { control in
+                    colorRow(control, clips: clips)
+                }
+            }
+            .padding(.leading, sectionContentIndent)
+        }
+    }
+
+    @ViewBuilder
+    private func colorRow(_ control: ColorControl, clips: [Clip]) -> some View {
+        if let descriptor = EffectRegistry.descriptor(id: control.effectId),
+           let spec = descriptor.params.first(where: { $0.key == control.paramKey }) {
+            propertyRow(label: spec.label) {
+                ScrubbableNumberField(
+                    value: sharedClipValue(clips) { colorValue($0, control, spec) },
+                    range: spec.range,
+                    format: effectParamFormat(spec),
+                    valueSuffix: spec.unit.isEmpty ? "" : " \(spec.unit)",
+                    dragSensitivity: effectParamSensitivity(spec),
+                    fieldWidth: 56,
+                    onChanged: { value in setColorParam(control, spec: spec, value: value, clips: clips, commit: false) }
+                ) { value in
+                    setColorParam(control, spec: spec, value: value, clips: clips, commit: true)
+                }
+            }
+            .frame(height: KeyframesMetrics.rowHeight)
+        }
+    }
+
+    private func colorValue(_ clip: Clip, _ control: ColorControl, _ spec: EffectParamSpec) -> Double {
+        (clip.effects ?? []).first { $0.type == control.effectId }?
+            .params[control.paramKey]?.resolved(at: 0, default: spec.defaultValue) ?? spec.defaultValue
+    }
+
+    private func setColorParam(
+        _ control: ColorControl, spec: EffectParamSpec, value: Double, clips: [Clip], commit: Bool
+    ) {
+        let mutate: (inout [Effect]) -> Void = { [self] effects in
+            upsertColorParam(&effects, control: control, value: value)
+        }
+        if commit {
+            commitEffects(clips, actionName: "Change \(spec.label)", mutate)
+        } else {
+            applyEffects(clips, mutate)
+        }
+    }
+
+    /// Upsert one color param into the singleton effect of its type, inserting the
+    /// effect in canonical order when first touched and pruning it when every param
+    /// returns to default (so neutral color carries no effect / no render pass).
+    private func upsertColorParam(_ effects: inout [Effect], control: ColorControl, value: Double) {
+        guard let descriptor = EffectRegistry.descriptor(id: control.effectId) else { return }
+        if let i = effects.firstIndex(where: { $0.type == control.effectId }) {
+            effects[i].params[control.paramKey] = EffectParam(value: value)
+            let allDefault = descriptor.params.allSatisfy { spec in
+                (effects[i].params[spec.key]?.value ?? spec.defaultValue) == spec.defaultValue
+            }
+            if allDefault { effects.remove(at: i) }
+        } else {
+            let paramDefault = descriptor.params.first { $0.key == control.paramKey }?.defaultValue
+            guard value != paramDefault else { return }
+            var effect = descriptor.makeEffect()
+            effect.params[control.paramKey] = EffectParam(value: value)
+            effects.insert(effect, at: colorInsertIndex(effects, for: control.effectId))
+        }
+    }
+
+    private func colorInsertIndex(_ effects: [Effect], for effectId: String) -> Int {
+        let rank = colorEffectOrder.firstIndex(of: effectId) ?? Int.max
+        return effects.firstIndex { (colorEffectOrder.firstIndex(of: $0.type) ?? Int.max) > rank } ?? effects.count
+    }
+
+    private func anyColorAdjusted(_ clips: [Clip]) -> Bool {
+        clips.contains { ($0.effects ?? []).contains { isColorManaged($0.type) } }
+    }
+
+    private func resetColor(clips: [Clip]) {
+        commitEffects(clips, actionName: "Reset Color") { effects in
+            effects.removeAll { self.isColorManaged($0.type) }
+        }
+    }
+
+    // MARK: Effects stack (discretionary)
+
+    @ViewBuilder
+    private func effectsStackSection(clips: [Clip]) -> some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            effectsStackHeader(clips: clips)
+            if let stack = sharedClipValue(clips, { ($0.effects ?? []).filter { !self.isColorManaged($0.type) } }) {
+                if stack.isEmpty {
+                    Text("No effects. Add blur, LUT, vignette, grain…")
+                        .font(.system(size: AppTheme.FontSize.xs))
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                } else {
+                    ForEach(stack) { effect in
+                        effectSection(effect, visible: stack, clips: clips)
+                    }
+                }
+            } else {
+                Text("Effect stacks differ across the selection.")
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            }
+        }
+    }
+
+    private func effectsStackHeader(clips: [Clip]) -> some View {
+        HStack {
+            sectionTitleLabel(title: "Effects")
+            Spacer()
+            Menu {
+                ForEach(stackEffectCategories, id: \.name) { category in
+                    Section(category.name) {
+                        ForEach(category.descriptors) { descriptor in
+                            Button(descriptor.displayName) { addEffect(descriptor, clips: clips) }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: AppTheme.FontSize.sm))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    .frame(width: AppTheme.IconSize.md, height: AppTheme.IconSize.md)
+                    .hoverHighlight()
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Add effect")
+        }
+    }
+
+    private var stackEffectCategories: [(name: String, descriptors: [EffectDescriptor])] {
+        Dictionary(grouping: EffectRegistry.all.filter { !isColorManaged($0.id) }, by: \.category)
+            .map { (name: $0.key, descriptors: $0.value) }
+            .sorted { $0.name < $1.name }
+    }
+
+    @ViewBuilder
+    private func effectSection(_ effect: Effect, visible: [Effect], clips: [Clip]) -> some View {
+        let descriptor = EffectRegistry.descriptor(id: effect.type)
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            effectSectionHeader(effect, visible: visible, descriptor: descriptor, clips: clips)
+            if let descriptor {
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+                    if let resourceKey = descriptor.resourceKey {
+                        effectResourceRow(effect: effect, resourceKey: resourceKey, clips: clips)
+                    }
+                    ForEach(descriptor.params, id: \.key) { spec in
+                        effectParamRow(effect: effect, spec: spec, clips: clips)
+                    }
+                }
+                .padding(.leading, sectionContentIndent)
+                .opacity(effect.enabled ? 1 : 0.4)
+            } else {
+                Text("Unknown effect — needs a newer version of Palmier.")
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            }
+        }
+    }
+
+    private func effectSectionHeader(
+        _ effect: Effect, visible: [Effect], descriptor: EffectDescriptor?, clips: [Clip]
+    ) -> some View {
+        let index = visible.firstIndex { $0.id == effect.id } ?? 0
+        return HStack(spacing: AppTheme.Spacing.xs) {
+            sectionTitleLabel(title: descriptor?.displayName ?? effect.type)
+            Spacer()
+            iconToggleButton(
+                systemName: effect.enabled ? "eye" : "eye.slash",
+                isOn: effect.enabled,
+                help: effect.enabled ? "Disable effect" : "Enable effect"
+            ) {
+                let on = !effect.enabled
+                commitEffects(clips, actionName: on ? "Enable Effect" : "Disable Effect") {
+                    $0[safeId: effect.id]?.enabled = on
+                }
+            }
+            effectHeaderButton("chevron.up", help: "Move up", enabled: index > 0) {
+                moveEffect(effect, by: -1, within: visible, clips: clips)
+            }
+            effectHeaderButton("chevron.down", help: "Move down", enabled: index < visible.count - 1) {
+                moveEffect(effect, by: 1, within: visible, clips: clips)
+            }
+            if descriptor != nil {
+                effectHeaderButton("arrow.counterclockwise", help: "Reset to defaults", enabled: true) {
+                    commitEffects(clips, actionName: "Reset Effect") {
+                        if let d = descriptor { $0[safeId: effect.id]?.params = d.makeEffect().params }
+                    }
+                }
+            }
+            effectHeaderButton("xmark", help: "Remove effect", enabled: true) {
+                commitEffects(clips, actionName: "Remove Effect") { $0.removeAll { $0.id == effect.id } }
+            }
+        }
+    }
+
+    /// Swap with the adjacent visible (non-color) effect by id, so reordering is
+    /// correct regardless of where the color effects sit in the underlying array.
+    private func moveEffect(_ effect: Effect, by offset: Int, within visible: [Effect], clips: [Clip]) {
+        guard let v = visible.firstIndex(where: { $0.id == effect.id }) else { return }
+        let target = v + offset
+        guard visible.indices.contains(target) else { return }
+        let otherId = visible[target].id
+        commitEffects(clips, actionName: "Reorder Effects") { effects in
+            guard let a = effects.firstIndex(where: { $0.id == effect.id }),
+                  let b = effects.firstIndex(where: { $0.id == otherId }) else { return }
+            effects.swapAt(a, b)
+        }
+    }
+
+    private func effectHeaderButton(
+        _ systemName: String, help: String, enabled: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: AppTheme.FontSize.sm))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                .frame(width: AppTheme.IconSize.md, height: AppTheme.IconSize.md)
+                .hoverHighlight()
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.3)
+        .help(help)
+    }
+
+    @ViewBuilder
+    private func effectParamRow(effect: Effect, spec: EffectParamSpec, clips: [Clip]) -> some View {
+        propertyRow(label: spec.label) {
+            ScrubbableNumberField(
+                value: sharedClipValue(clips) {
+                    ($0.effects ?? [])[safeId: effect.id]?.params[spec.key]?
+                        .resolved(at: 0, default: spec.defaultValue) ?? spec.defaultValue
+                },
+                range: spec.range,
+                format: effectParamFormat(spec),
+                valueSuffix: spec.unit.isEmpty ? "" : " \(spec.unit)",
+                dragSensitivity: effectParamSensitivity(spec),
+                fieldWidth: 56,
+                onChanged: { value in
+                    applyEffects(clips) { $0[safeId: effect.id]?.params[spec.key] = EffectParam(value: value) }
+                }
+            ) { value in
+                commitEffects(clips, actionName: "Change \(spec.label)") {
+                    $0[safeId: effect.id]?.params[spec.key] = EffectParam(value: value)
+                }
+            }
+        }
+        .frame(height: KeyframesMetrics.rowHeight)
+    }
+
+    @ViewBuilder
+    private func effectResourceRow(effect: Effect, resourceKey: String, clips: [Clip]) -> some View {
+        let path = sharedClipValue(clips) {
+            ($0.effects ?? [])[safeId: effect.id]?.params[resourceKey]?.string ?? ""
+        } ?? ""
+        propertyRow(label: "File") {
+            Button {
+                chooseEffectResource(effect: effect, resourceKey: resourceKey, clips: clips)
+            } label: {
+                Text(path.isEmpty ? "Choose…" : URL(fileURLWithPath: path).lastPathComponent)
+                    .font(.system(size: AppTheme.FontSize.sm, weight: .medium))
+                    .foregroundStyle(path.isEmpty ? AppTheme.Accent.primary : AppTheme.Text.secondaryColor)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .buttonStyle(.plain)
+            .help(path.isEmpty ? "Choose a .cube LUT file" : path)
+        }
+        .frame(height: KeyframesMetrics.rowHeight)
+    }
+
+    private func effectParamFormat(_ spec: EffectParamSpec) -> String {
+        (spec.range.upperBound - spec.range.lowerBound) <= 20 ? "%.2f" : "%.0f"
+    }
+
+    private func effectParamSensitivity(_ spec: EffectParamSpec) -> Double {
+        max(0.01, (spec.range.upperBound - spec.range.lowerBound) / 200)
+    }
+
+    private func chooseEffectResource(effect: Effect, resourceKey: String, clips: [Clip]) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "cube")].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        commitEffects(clips, actionName: "Choose LUT") {
+            $0[safeId: effect.id]?.params[resourceKey] = EffectParam(string: url.path)
+        }
+    }
+
+    private func addEffect(_ descriptor: EffectDescriptor, clips: [Clip]) {
+        let effect = descriptor.makeEffect()
+        commitEffects(clips, actionName: "Add Effect") { $0.append(effect) }
+    }
+
+    /// Live edit (no undo entry) — mirrors applyClipProperty's refresh-only path.
+    private func applyEffects(_ clips: [Clip], _ mutate: @escaping (inout [Effect]) -> Void) {
+        for clip in clips {
+            editor.applyClipProperty(clipId: clip.id) { c in
+                var effects = c.effects ?? []
+                mutate(&effects)
+                c.effects = effects.isEmpty ? nil : effects
+            }
+        }
+    }
+
+    /// One undoable entry across all selected clips.
+    private func commitEffects(
+        _ clips: [Clip], actionName: String, _ mutate: @escaping (inout [Effect]) -> Void
+    ) {
+        editor.undoManager?.beginUndoGrouping()
+        for clip in clips {
+            editor.commitClipProperty(clipId: clip.id) { c in
+                var effects = c.effects ?? []
+                mutate(&effects)
+                c.effects = effects.isEmpty ? nil : effects
+            }
+        }
+        editor.undoManager?.endUndoGrouping()
+        editor.undoManager?.setActionName(actionName)
+    }
 
     @ViewBuilder
     private func speedSection(clips: [Clip]) -> some View {

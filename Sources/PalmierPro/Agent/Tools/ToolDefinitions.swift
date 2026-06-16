@@ -10,6 +10,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case moveClips = "move_clips"
     case setClipProperties = "set_clip_properties"
     case setKeyframes = "set_keyframes"
+    case setEffects = "set_effects"
     case splitClip = "split_clip"
     case addTexts = "add_texts"
     case addCaptions = "add_captions"
@@ -222,6 +223,33 @@ enum ToolDefinitions {
                     ],
                 ],
                 required: ["clipId", "property", "keyframes"]
+            )
+        ),
+        AgentTool(
+            name: .setEffects,
+            description: "Set the visual effect stack on one or more clips (video/image only — not text or audio). REPLACES each clip's entire stack in one undoable action; pass an empty array to clear. Effects apply in array order, in source-pixel space before the clip's transform. Params are static values (clamped to range); omitted params use defaults.\n\nAvailable effects:\n\(effectsCatalog)\n\nThe LUT effect needs params.path set to an absolute path of a .cube file (≤64³). Read current stacks from get_timeline (clips report an 'effects' array when set).",
+            inputSchema: objectSchema(
+                properties: [
+                    "clipIds": [
+                        "type": "array",
+                        "description": "Clips receiving this exact stack. For per-clip differences, make separate calls.",
+                        "items": ["type": "string"],
+                    ],
+                    "effects": [
+                        "type": "array",
+                        "description": "Replacement stack, applied in order. Empty array removes all effects.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "type": ["type": "string", "description": "Effect id from the catalog, e.g. 'color.exposure'."],
+                                "enabled": ["type": "boolean", "description": "Default true. Disabled effects stay in the stack but don't render."],
+                                "params": ["type": "object", "description": "Param key → number (or string for the LUT 'path'). Omitted params use defaults."],
+                            ],
+                            "required": ["type"],
+                        ],
+                    ],
+                ],
+                required: ["clipIds", "effects"]
             )
         ),
         AgentTool(
@@ -522,6 +550,18 @@ enum ToolDefinitions {
             )
         ),
     ]
+
+    /// Effect catalog for the set_effects description, generated from the registry
+    /// so new descriptors surface to agents automatically.
+    private static var effectsCatalog: String {
+        EffectRegistry.all.map { descriptor in
+            let params = descriptor.params.map { spec in
+                let unit = spec.unit.isEmpty ? "" : " \(spec.unit)"
+                return "\(spec.key) \(spec.range.lowerBound)–\(spec.range.upperBound)\(unit), default \(spec.defaultValue)"
+            }.joined(separator: "; ")
+            return "• \(descriptor.id) (\(descriptor.displayName)): \(params)"
+        }.joined(separator: "\n")
+    }
 
     private static func objectSchema(
         properties: [String: [String: Any]] = [:],

@@ -28,6 +28,7 @@ import Foundation
 /// - Text overlays. FCPXML supports this, not XMEML.
 /// - Flips (horizontal/vertical)
 /// - Keyframe interpolation curves (linear/hold/smooth): keyframes import with default easing
+/// - Effects (Clip.effects): Core Image stacks have no XMEML representation — stripped, warned in ExportView
 ///
 /// Coordinates are in timeline frames; FCP7 rotation is counter-clockwise-positive, so we negate our clockwise-positive values.
 /// 
